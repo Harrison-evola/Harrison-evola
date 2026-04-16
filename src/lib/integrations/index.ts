@@ -3,16 +3,43 @@ import { YelpClient } from "./yelp";
 import { FacebookClient } from "./facebook";
 import { AppleMapsClient } from "./apple";
 import type { PlatformClient } from "./types";
+import { db } from "@/lib/db";
 
 export type { PlatformClient, BusinessInfo, PlatformReview, SyncResult, MenuData } from "./types";
+export { GoogleBusinessClient } from "./google";
 
-export function getPlatformClient(platform: string): PlatformClient | null {
+export async function getPlatformClient(
+  platform: string,
+  organizationId?: string
+): Promise<PlatformClient | null> {
   switch (platform) {
     case "GOOGLE": {
       const clientId = process.env.GOOGLE_CLIENT_ID;
       const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+      if (!clientId || !clientSecret) return null;
+
+      // Try org-level stored credentials first
+      if (organizationId) {
+        const credential = await db.platformCredential.findUnique({
+          where: {
+            organizationId_platform: {
+              organizationId,
+              platform: "GOOGLE",
+            },
+          },
+        });
+        if (credential) {
+          return new GoogleBusinessClient(
+            clientId,
+            clientSecret,
+            credential.refreshToken
+          );
+        }
+      }
+
+      // Fall back to env var refresh token
       const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-      if (!clientId || !clientSecret || !refreshToken) return null;
+      if (!refreshToken) return null;
       return new GoogleBusinessClient(clientId, clientSecret, refreshToken);
     }
 

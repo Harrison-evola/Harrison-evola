@@ -46,7 +46,7 @@ export async function POST(
     // Try to push to the platform
     let pushSuccess = false;
     if (review.externalId) {
-      const client = getPlatformClient(review.platform);
+      const client = await getPlatformClient(review.platform, review.location.organizationId);
       if (client) {
         const result = await client.pushReviewResponse(
           review.externalId,

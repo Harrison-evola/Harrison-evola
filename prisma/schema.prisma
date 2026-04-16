@@ -17,9 +17,10 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  locations      Location[]
-  webhookConfigs WebhookConfig[]
-  apiKeys        ApiKey[]
+  locations           Location[]
+  webhookConfigs      WebhookConfig[]
+  apiKeys             ApiKey[]
+  platformCredentials PlatformCredential[]
 }
 
 // ─── Location (Individual Business / Restaurant) ─────────────────────────────
@@ -283,6 +284,26 @@ model WebhookDelivery {
 
   @@index([webhookId])
   @@index([event])
+}
+
+// ─── Platform Credentials (OAuth tokens per org) ─────────────────────────────
+
+model PlatformCredential {
+  id              String    @id @default(cuid())
+  organizationId  String
+  platform        Platform
+  accessToken     String?
+  refreshToken    String
+  tokenExpiresAt  DateTime?
+  googleAccountId String?   // GBP account resource name, e.g. "accounts/12345"
+  googleEmail     String?   // Display label: "Connected as user@gmail.com"
+  connectedAt     DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, platform])
+  @@index([organizationId])
 }
 
 // ─── API Keys ────────────────────────────────────────────────────────────────

@@ -141,7 +141,7 @@ export class GoogleBusinessClient implements PlatformClient {
     }
   }
 
-  private parseGoogleHours(periods: Array<{
+  parseGoogleHours(periods: Array<{
     openDay: string;
     openTime: { hours: number; minutes: number };
     closeDay: string;
@@ -171,6 +171,90 @@ export class GoogleBusinessClient implements PlatformClient {
     }
 
     return hours;
+  }
+
+  // ─── Account & Location Discovery ─────────────────────────────────────────
+
+  async listAccounts(): Promise<
+    Array<{ name: string; accountName: string; type: string }>
+  > {
+    try {
+      const res = await this.request(
+        "https://mybusinessaccountmanagement.googleapis.com/v1/accounts"
+      );
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`Failed to list accounts: ${res.status} ${err}`);
+      }
+      const data = await res.json();
+      return (data.accounts ?? []).map(
+        (a: { name: string; accountName: string; type: string }) => ({
+          name: a.name,
+          accountName: a.accountName ?? a.name,
+          type: a.type ?? "PERSONAL",
+        })
+      );
+    } catch (err) {
+      console.error("listAccounts error:", err);
+      return [];
+    }
+  }
+
+  async listLocations(
+    accountName: string
+  ): Promise<Array<Record<string, unknown>>> {
+    const allLocations: Array<Record<string, unknown>> = [];
+    let pageToken: string | undefined;
+
+    try {
+      do {
+        const params = new URLSearchParams({
+          readMask:
+            "name,title,storefrontAddress,phoneNumbers,websiteUri,regularHours,metadata,latlng,categories",
+          pageSize: "100",
+        });
+        if (pageToken) params.set("pageToken", pageToken);
+
+        const res = await this.request(
+          `https://mybusinessbusinessinformation.googleapis.com/v1/${accountName}/locations?${params}`
+        );
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error(
+            `Failed to list locations: ${res.status} ${err}`
+          );
+        }
+
+        const data = await res.json();
+        if (data.locations) {
+          allLocations.push(...data.locations);
+        }
+        pageToken = data.nextPageToken;
+      } while (pageToken);
+    } catch (err) {
+      console.error("listLocations error:", err);
+    }
+
+    return allLocations;
+  }
+
+  async getLocationDetails(
+    locationName: string
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      const params = new URLSearchParams({
+        readMask:
+          "name,title,storefrontAddress,phoneNumbers,websiteUri,regularHours,metadata,latlng,categories",
+      });
+      const res = await this.request(
+        `https://mybusinessbusinessinformation.googleapis.com/v1/${locationName}?${params}`
+      );
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
   }
 
   async verifyConnection(credentials: Record<string, string>): Promise<boolean> {

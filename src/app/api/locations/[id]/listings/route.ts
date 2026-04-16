@@ -77,7 +77,7 @@ export async function POST(
 
     // If externalId provided, try initial sync
     if (parsed.data.externalId) {
-      const client = getPlatformClient(parsed.data.platform);
+      const client = await getPlatformClient(parsed.data.platform, location.organizationId);
       if (client) {
         const result = await client.pushListing(parsed.data.externalId, {
           name: location.name,

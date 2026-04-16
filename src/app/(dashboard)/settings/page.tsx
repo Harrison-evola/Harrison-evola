@@ -1,12 +1,27 @@
 "use client";
 
-import { useState } from "react";
-import { Settings, Globe, Webhook, Key, Plus, Trash2, Eye, EyeOff, Copy, Check } from "lucide-react";
+import { useState, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+import {
+  Globe,
+  Webhook,
+  Key,
+  Plus,
+  Trash2,
+  Copy,
+  Check,
+  Loader2,
+  MapPin,
+  LogOut,
+} from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+} from "@/components/ui/card";
 import { StatusDot } from "@/components/ui/status-dot";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -16,42 +31,41 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { GoogleLocationPicker } from "@/components/settings/google-location-picker";
 import { WEBHOOK_EVENTS, type WebhookEventType } from "@/lib/types";
+
+interface GoogleStatus {
+  connected: boolean;
+  email: string | null;
+  connectedAt: string | null;
+  locationCount: number;
+}
 
 interface PlatformConnection {
   platform: string;
   label: string;
-  connected: boolean;
   description: string;
   envVars: string[];
 }
 
-const platforms: PlatformConnection[] = [
-  {
-    platform: "GOOGLE",
-    label: "Google Business Profile",
-    connected: false,
-    description: "Manage your Google Business listings, hours, and respond to reviews.",
-    envVars: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN"],
-  },
+const otherPlatforms: PlatformConnection[] = [
   {
     platform: "YELP",
     label: "Yelp",
-    connected: false,
-    description: "Pull reviews and business data from Yelp. Listing updates require Business Owners access.",
+    description:
+      "Pull reviews and business data from Yelp. Listing updates require Business Owners access.",
     envVars: ["YELP_API_KEY"],
   },
   {
     platform: "FACEBOOK",
     label: "Facebook Pages",
-    connected: false,
-    description: "Manage your Facebook Page listings, hours, and respond to recommendations.",
+    description:
+      "Manage your Facebook Page listings, hours, and respond to recommendations.",
     envVars: ["FACEBOOK_PAGE_ACCESS_TOKEN"],
   },
   {
     platform: "APPLE_MAPS",
     label: "Apple Maps",
-    connected: false,
     description: "Manage your Apple Business Connect place cards.",
     envVars: ["APPLE_TEAM_ID", "APPLE_KEY_ID", "APPLE_PRIVATE_KEY"],
   },
@@ -75,15 +89,82 @@ const demoWebhooks: WebhookConfig[] = [
   },
 ];
 
-export default function SettingsPage() {
+function SettingsPageInner() {
+  const searchParams = useSearchParams();
+  const googleParam = searchParams.get("google");
+
+  // Google connection state
+  const [googleStatus, setGoogleStatus] = useState<GoogleStatus | null>(null);
+  const [googleLoading, setGoogleLoading] = useState(true);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
+
+  // Webhook state
   const [showAddWebhook, setShowAddWebhook] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [webhookEvents, setWebhookEvents] = useState<WebhookEventType[]>([]);
+
+  // API key state
   const [copiedSecret, setCopiedSecret] = useState(false);
+
+  // Fetch Google status on mount
+  useEffect(() => {
+    fetch("/api/auth/google/status")
+      .then((res) => res.json())
+      .then((data) => setGoogleStatus(data))
+      .catch(() =>
+        setGoogleStatus({
+          connected: false,
+          email: null,
+          connectedAt: null,
+          locationCount: 0,
+        })
+      )
+      .finally(() => setGoogleLoading(false));
+  }, []);
+
+  // Auto-open picker after OAuth redirect
+  useEffect(() => {
+    if (googleParam === "connected" && googleStatus?.connected) {
+      setShowPicker(true);
+    }
+  }, [googleParam, googleStatus]);
+
+  const handleConnectGoogle = () => {
+    window.location.href = "/api/auth/google";
+  };
+
+  const handleDisconnectGoogle = async () => {
+    setDisconnecting(true);
+    try {
+      const res = await fetch("/api/auth/google/disconnect", {
+        method: "POST",
+      });
+      if (res.ok) {
+        setGoogleStatus({
+          connected: false,
+          email: null,
+          connectedAt: null,
+          locationCount: 0,
+        });
+      }
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
+  const refreshGoogleStatus = () => {
+    fetch("/api/auth/google/status")
+      .then((res) => res.json())
+      .then((data) => setGoogleStatus(data))
+      .catch(() => {});
+  };
 
   const toggleEvent = (event: WebhookEventType) => {
     setWebhookEvents((prev) =>
-      prev.includes(event) ? prev.filter((e) => e !== event) : [...prev, event]
+      prev.includes(event)
+        ? prev.filter((e) => e !== event)
+        : [...prev, event]
     );
   };
 
@@ -100,7 +181,7 @@ export default function SettingsPage() {
         description="Manage platform connections, webhooks, and API keys."
       />
 
-      <Tabs defaultValue="platforms">
+      <Tabs defaultValue={searchParams.get("tab") ?? "platforms"}>
         <TabsList>
           <TabsTrigger value="platforms">
             <Globe className="h-4 w-4 mr-1.5" />
@@ -116,23 +197,121 @@ export default function SettingsPage() {
           </TabsTrigger>
         </TabsList>
 
-        {/* Platforms Tab */}
+        {/* ─── Platforms Tab ──────────────────────────────────────────── */}
         <TabsContent value="platforms" className="mt-4 space-y-4">
           <p className="text-sm text-muted-foreground">
-            Connect your accounts to sync listings, reviews, and menus across platforms.
-            API credentials are set via environment variables for security.
+            Connect your accounts to sync listings, reviews, and menus across
+            platforms.
           </p>
-          {platforms.map((p) => (
+
+          {/* Google Business Profile — OAuth-powered */}
+          <Card>
+            <CardContent className="p-5">
+              {googleLoading ? (
+                <div className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">
+                    Checking Google connection...
+                  </span>
+                </div>
+              ) : googleStatus?.connected ? (
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <StatusDot status="connected" />
+                        <h3 className="font-semibold">
+                          Google Business Profile
+                        </h3>
+                        <Badge variant="success">Connected</Badge>
+                      </div>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Connected as{" "}
+                        <span className="font-medium">
+                          {googleStatus.email ?? "Google Account"}
+                        </span>
+                      </p>
+                      {googleStatus.connectedAt && (
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Connected{" "}
+                          {new Date(
+                            googleStatus.connectedAt
+                          ).toLocaleDateString()}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowPicker(true)}
+                      >
+                        <MapPin className="h-4 w-4" />
+                        Manage Locations
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleDisconnectGoogle}
+                        disabled={disconnecting}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        {disconnecting ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <LogOut className="h-4 w-4" />
+                        )}
+                        Disconnect
+                      </Button>
+                    </div>
+                  </div>
+                  {googleStatus.locationCount > 0 && (
+                    <div className="flex items-center gap-2 pt-1 border-t">
+                      <Badge variant="secondary">
+                        {googleStatus.locationCount} location
+                        {googleStatus.locationCount !== 1 ? "s" : ""} linked
+                      </Badge>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <StatusDot status="disconnected" />
+                      <h3 className="font-semibold">
+                        Google Business Profile
+                      </h3>
+                      <Badge variant="secondary">Not Connected</Badge>
+                    </div>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Connect your Google account to import business locations,
+                      sync hours and info, and manage reviews.
+                    </p>
+                    {googleParam === "error" && (
+                      <p className="text-xs text-destructive mt-2">
+                        Connection failed. Please try again.
+                      </p>
+                    )}
+                  </div>
+                  <Button size="sm" onClick={handleConnectGoogle}>
+                    Connect with Google
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Other platforms — env var based */}
+          {otherPlatforms.map((p) => (
             <Card key={p.platform}>
               <CardContent className="p-5">
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <StatusDot status={p.connected ? "connected" : "disconnected"} />
+                      <StatusDot status="disconnected" />
                       <h3 className="font-semibold">{p.label}</h3>
-                      <Badge variant={p.connected ? "success" : "secondary"}>
-                        {p.connected ? "Connected" : "Not Connected"}
-                      </Badge>
+                      <Badge variant="secondary">Not Connected</Badge>
                     </div>
                     <p className="text-sm text-muted-foreground mt-1">
                       {p.description}
@@ -153,11 +332,8 @@ export default function SettingsPage() {
                       </div>
                     </div>
                   </div>
-                  <Button
-                    variant={p.connected ? "outline" : "default"}
-                    size="sm"
-                  >
-                    {p.connected ? "Disconnect" : "Connect"}
+                  <Button variant="default" size="sm">
+                    Connect
                   </Button>
                 </div>
               </CardContent>
@@ -165,14 +341,13 @@ export default function SettingsPage() {
           ))}
         </TabsContent>
 
-        {/* Webhooks Tab */}
+        {/* ─── Webhooks Tab ───────────────────────────────────────────── */}
         <TabsContent value="webhooks" className="mt-4 space-y-4">
           <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground">
-                Send real-time events to your dashboard when listings sync, reviews arrive, or menus update.
-              </p>
-            </div>
+            <p className="text-sm text-muted-foreground">
+              Send real-time events to your dashboard when listings sync,
+              reviews arrive, or menus update.
+            </p>
             <Button onClick={() => setShowAddWebhook(true)}>
               <Plus className="h-4 w-4" />
               Add Webhook
@@ -185,12 +360,20 @@ export default function SettingsPage() {
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <StatusDot status={wh.isActive ? "connected" : "disconnected"} />
-                      <code className="text-sm font-mono truncate">{wh.url}</code>
+                      <StatusDot
+                        status={wh.isActive ? "connected" : "disconnected"}
+                      />
+                      <code className="text-sm font-mono truncate">
+                        {wh.url}
+                      </code>
                     </div>
                     <div className="flex flex-wrap gap-1.5 mt-2">
                       {wh.events.map((e) => (
-                        <Badge key={e} variant="secondary" className="text-[10px]">
+                        <Badge
+                          key={e}
+                          variant="secondary"
+                          className="text-[10px]"
+                        >
                           {e}
                         </Badge>
                       ))}
@@ -199,11 +382,13 @@ export default function SettingsPage() {
                       {wh.deliveryCount} deliveries
                     </p>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive">
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-destructive hover:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </div>
               </CardContent>
             </Card>
@@ -211,9 +396,11 @@ export default function SettingsPage() {
 
           <Card className="border-dashed">
             <CardContent className="p-5">
-              <h4 className="text-sm font-medium mb-2">Webhook Payload Format</h4>
+              <h4 className="text-sm font-medium mb-2">
+                Webhook Payload Format
+              </h4>
               <pre className="rounded bg-muted p-3 text-xs font-mono overflow-x-auto">
-{`{
+                {`{
   "event": "review.created",
   "timestamp": "2024-03-15T10:00:00Z",
   "data": {
@@ -226,14 +413,15 @@ export default function SettingsPage() {
 }`}
               </pre>
               <p className="text-xs text-muted-foreground mt-2">
-                Webhooks include an <code className="text-[11px]">X-Webhook-Signature</code> header
+                Webhooks include an{" "}
+                <code className="text-[11px]">X-Webhook-Signature</code> header
                 (HMAC-SHA256) for verification.
               </p>
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* API Keys Tab */}
+        {/* ─── API Keys Tab ───────────────────────────────────────────── */}
         <TabsContent value="api" className="mt-4 space-y-4">
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">
@@ -260,10 +448,22 @@ export default function SettingsPage() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="sm" onClick={handleCopySecret}>
-                    {copiedSecret ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleCopySecret}
+                  >
+                    {copiedSecret ? (
+                      <Check className="h-4 w-4" />
+                    ) : (
+                      <Copy className="h-4 w-4" />
+                    )}
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-destructive hover:text-destructive"
+                  >
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
@@ -275,21 +475,23 @@ export default function SettingsPage() {
             <CardContent className="p-5">
               <h4 className="text-sm font-medium mb-2">API Usage</h4>
               <pre className="rounded bg-muted p-3 text-xs font-mono overflow-x-auto">
-{`curl -H "Authorization: Bearer lh_prod_YOUR_KEY" \\
+                {`curl -H "Authorization: Bearer lh_prod_YOUR_KEY" \\
      https://your-app.com/api/locations`}
               </pre>
               <div className="mt-3 space-y-1">
-                <p className="text-xs text-muted-foreground">Available endpoints:</p>
+                <p className="text-xs text-muted-foreground">
+                  Available endpoints:
+                </p>
                 <div className="grid gap-1 text-xs font-mono">
-                  <span>GET  /api/locations</span>
+                  <span>GET /api/locations</span>
                   <span>POST /api/locations</span>
-                  <span>GET  /api/locations/:id</span>
-                  <span>GET  /api/locations/:id/listings</span>
-                  <span>GET  /api/locations/:id/menus</span>
-                  <span>GET  /api/locations/:id/reviews</span>
+                  <span>GET /api/locations/:id</span>
+                  <span>GET /api/locations/:id/listings</span>
+                  <span>GET /api/locations/:id/menus</span>
+                  <span>GET /api/locations/:id/reviews</span>
                   <span>POST /api/sync</span>
                   <span>POST /api/reviews/:id/respond</span>
-                  <span>GET  /api/webhooks</span>
+                  <span>GET /api/webhooks</span>
                   <span>POST /api/webhooks</span>
                 </div>
               </div>
@@ -304,12 +506,15 @@ export default function SettingsPage() {
           <DialogHeader>
             <DialogTitle>Add Webhook</DialogTitle>
             <DialogDescription>
-              We&apos;ll send POST requests to your URL when selected events occur.
+              We&apos;ll send POST requests to your URL when selected events
+              occur.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <label className="text-sm font-medium mb-1 block">Endpoint URL</label>
+              <label className="text-sm font-medium mb-1 block">
+                Endpoint URL
+              </label>
               <Input
                 type="url"
                 placeholder="https://your-dashboard.com/api/webhooks"
@@ -351,6 +556,21 @@ export default function SettingsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Google Location Picker */}
+      <GoogleLocationPicker
+        open={showPicker}
+        onOpenChange={setShowPicker}
+        onImportComplete={refreshGoogleStatus}
+      />
     </div>
+  );
+}
+
+export default function SettingsPage() {
+  return (
+    <Suspense>
+      <SettingsPageInner />
+    </Suspense>
   );
 }

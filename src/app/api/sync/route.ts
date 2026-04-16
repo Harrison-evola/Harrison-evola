@@ -58,7 +58,7 @@ async function handlePushListing(listingId?: string) {
     return NextResponse.json({ error: "Listing not found" }, { status: 404 });
   }
 
-  const client = getPlatformClient(listing.platform);
+  const client = await getPlatformClient(listing.platform, listing.location.organizationId);
   if (!client) {
     return NextResponse.json(
       { error: `No API client configured for ${listing.platform}. Check environment variables.` },
@@ -139,7 +139,7 @@ async function handlePullReviews(locationId?: string) {
   let totalNew = 0;
 
   for (const listing of listings) {
-    const client = getPlatformClient(listing.platform);
+    const client = await getPlatformClient(listing.platform, listing.location.organizationId);
     if (!client || !listing.externalId) continue;
 
     const lastReview = await db.review.findFirst({
@@ -230,7 +230,7 @@ async function handlePushMenu(locationId?: string) {
   const results: Array<{ platform: string; success: boolean; error?: string }> = [];
 
   for (const listing of listings) {
-    const client = getPlatformClient(listing.platform);
+    const client = await getPlatformClient(listing.platform, listing.location.organizationId);
     if (!client?.pushMenu || !listing.externalId) continue;
 
     for (const menu of menus) {
