@@ -1,0 +1,304 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Organization (Agency or Restaurant Group) ───────────────────────────────
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  plan      String   @default("free")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  locations      Location[]
+  webhookConfigs WebhookConfig[]
+  apiKeys        ApiKey[]
+}
+
+// ─── Location (Individual Business / Restaurant) ─────────────────────────────
+
+model Location {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  slug           String
+  address        String
+  address2       String?
+  city           String
+  state          String
+  zip            String
+  country        String   @default("US")
+  phone          String?
+  email          String?
+  website        String?
+  latitude       Float?
+  longitude      Float?
+  timezone       String   @default("America/New_York")
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  listings     Listing[]
+  menus        Menu[]
+  reviews      Review[]
+  hours        BusinessHours[]
+  syncLogs     SyncLog[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+}
+
+// ─── Business Hours ──────────────────────────────────────────────────────────
+
+model BusinessHours {
+  id         String  @id @default(cuid())
+  locationId String
+  dayOfWeek  Int
+  openTime   String?
+  closeTime  String?
+  isClosed   Boolean @default(false)
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([locationId, dayOfWeek])
+  @@index([locationId])
+}
+
+// ─── Listings (Per-Platform Presence) ────────────────────────────────────────
+
+enum Platform {
+  GOOGLE
+  YELP
+  FACEBOOK
+  APPLE_MAPS
+  TRIPADVISOR
+  DOORDASH
+  UBEREATS
+  GRUBHUB
+}
+
+enum ListingStatus {
+  CONNECTED
+  SYNCING
+  SYNCED
+  ERROR
+  DISCONNECTED
+}
+
+model Listing {
+  id             String        @id @default(cuid())
+  locationId     String
+  platform       Platform
+  externalId     String?
+  status         ListingStatus @default(DISCONNECTED)
+  profileUrl     String?
+  lastSyncedAt   DateTime?
+  lastError      String?
+  accuracyScore  Int?          @default(0)
+  platformData   Json?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  location Location  @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  syncLogs SyncLog[]
+
+  @@unique([locationId, platform])
+  @@index([locationId])
+  @@index([platform])
+}
+
+// ─── Menu Management ─────────────────────────────────────────────────────────
+
+model Menu {
+  id         String   @id @default(cuid())
+  locationId String
+  name       String
+  isActive   Boolean  @default(true)
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  location Location      @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  sections MenuSection[]
+
+  @@index([locationId])
+}
+
+model MenuSection {
+  id        String   @id @default(cuid())
+  menuId    String
+  name      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  menu  Menu       @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  items MenuItem[]
+
+  @@index([menuId])
+}
+
+model MenuItem {
+  id          String   @id @default(cuid())
+  sectionId   String
+  name        String
+  description String?
+  price       Int
+  imageUrl    String?
+  isAvailable Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  calories    Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  section     MenuSection   @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  dietaryTags DietaryTag[]
+
+  @@index([sectionId])
+}
+
+model DietaryTag {
+  id    String @id @default(cuid())
+  name  String @unique
+  slug  String @unique
+  color String @default("#6b7280")
+
+  items MenuItem[]
+}
+
+// ─── Reviews ─────────────────────────────────────────────────────────────────
+
+model Review {
+  id             String    @id @default(cuid())
+  locationId     String
+  platform       Platform
+  externalId     String?
+  authorName     String
+  authorAvatar   String?
+  rating         Int
+  text           String?
+  publishedAt    DateTime
+  respondedAt    DateTime?
+  sentiment      String?
+  sentimentScore Float?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  location Location        @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  response ReviewResponse?
+
+  @@unique([platform, externalId])
+  @@index([locationId])
+  @@index([platform])
+  @@index([rating])
+  @@index([publishedAt])
+}
+
+model ReviewResponse {
+  id        String    @id @default(cuid())
+  reviewId  String    @unique
+  text      String
+  sentAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+}
+
+// ─── Sync & Audit ────────────────────────────────────────────────────────────
+
+enum SyncAction {
+  PUSH_LISTING
+  PULL_LISTING
+  PUSH_MENU
+  PULL_REVIEWS
+  PUSH_RESPONSE
+}
+
+enum SyncStatus {
+  PENDING
+  IN_PROGRESS
+  SUCCESS
+  FAILED
+}
+
+model SyncLog {
+  id          String      @id @default(cuid())
+  locationId  String
+  listingId   String?
+  action      SyncAction
+  status      SyncStatus  @default(PENDING)
+  platform    Platform
+  details     Json?
+  error       String?
+  startedAt   DateTime    @default(now())
+  completedAt DateTime?
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  listing  Listing? @relation(fields: [listingId], references: [id], onDelete: SetNull)
+
+  @@index([locationId])
+  @@index([platform])
+  @@index([status])
+}
+
+// ─── Webhooks ────────────────────────────────────────────────────────────────
+
+model WebhookConfig {
+  id             String   @id @default(cuid())
+  organizationId String
+  url            String
+  secret         String
+  events         String[]
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deliveries   WebhookDelivery[]
+
+  @@index([organizationId])
+}
+
+model WebhookDelivery {
+  id          String    @id @default(cuid())
+  webhookId   String
+  event       String
+  payload     Json
+  statusCode  Int?
+  response    String?
+  attempts    Int       @default(0)
+  deliveredAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  webhook WebhookConfig @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId])
+  @@index([event])
+}
+
+// ─── API Keys ────────────────────────────────────────────────────────────────
+
+model ApiKey {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  keyHash        String    @unique
+  prefix         String
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([keyHash])
+}
